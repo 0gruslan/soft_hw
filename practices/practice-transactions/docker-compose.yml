@@ -1,0 +1,33 @@
+services:
+  db:
+    image: postgres:16
+    container_name: online_store_db
+    environment:
+      POSTGRES_DB: onlinestore
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d onlinestore"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    container_name: online_store_app
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: onlinestore
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+
+volumes:
+  postgres_data:
