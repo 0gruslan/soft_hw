@@ -1,271 +1,137 @@
-# Dating App (Telegram Bot)
+# Dating App Backend
 
-## Описание проекта
+Stage 2 and Stage 3 implementation is ready.
 
-Backend-система дейтинг-приложения, реализованного через Telegram-бота.
+## Implemented Services
 
-Система подбирает анкеты пользователей на основе алгоритма ранжирования:
+- `user_service` on port `8000`
+- `profile_service` on port `8001`
+- `interaction_service` on port `8002`
+- `ranking_service` on port `8003`
+- `bot_service` (Telegram bot)
 
-* первичного (данные анкеты)
-* поведенческого (лайки, мэтчи)
-* комбинированного
+## Stage 3 Coverage
 
----
+- Profile CRUD:
+- `POST /profiles`
+- `GET /profiles/{profile_id}`
+- `GET /profiles/by-user/{user_id}`
+- `PUT /profiles/by-user/{user_id}`
+- `DELETE /profiles/by-user/{user_id}`
 
-## Архитектура системы
-
-Архитектура построена по принципу микросервисов с асинхронной обработкой событий.
-
-### Сервисы
-
-#### 1. Bot Service
-
-* Точка входа (Telegram API)
-* Отправка анкет пользователю
-* Прием лайков / дизлайков
-
-#### 2. API Gateway
-
-* Единая точка входа для всех запросов
-* Роутинг на сервисы
-
-#### 3. User Service
-
-* Регистрация пользователей (Telegram ID)
-
-#### 4. Profile Service
-
-* CRUD анкет
-* Хранение профилей и фото
-
-#### 5. Interaction Service
-
-* Обработка лайков / дизлайков
-* Отправка событий в очередь
-
-#### 6. Matching Service
-
-* Проверка взаимных лайков (match)
-
-#### 7. Ranking Service
-
-* Расчет рейтинга пользователей
-* Выдача отсортированных анкет
-
-#### 8. Redis Cache
-
-* Кэш готовых анкет для пользователя
-* Ускорение выдачи
-
-#### 9. Message Broker (Kafka / RabbitMQ)
-
-* Асинхронные события:
-
-  * лайки
-  * просмотры
-  * мэтчи
-
-#### 10. Celery Worker
-
-* Фоновые задачи:
-
-  * пересчет рейтингов
-  * агрегация статистики
-
-#### 11. Storage (S3 / MinIO)
-
-* Хранение изображений
-
----
-
-## Поток данных
-
-### Получение анкеты
-
-1. Пользователь отправляет команду в Telegram
-2. Bot Service → API Gateway
-3. Gateway → Ranking Service
-4. Ranking Service:
-
-   * проверяет Redis
-   * если данных нет — запрашивает Profile Service
-5. Пользователь получает анкету
-
-### Обработка лайка
-
-1. Bot Service → Interaction Service
-2. Interaction Service → Message Broker
-3. Matching Service проверяет взаимный лайк
-4. Ranking Service обновляет рейтинг
-
----
-
-## Диаграмма архитектуры
-
-![alt text](image.png)
-
----
-
-## Схема базы данных
-
-### Таблица users
-
-* id (UUID)
-* telegram_id (BIGINT)
-* created_at (TIMESTAMP)
-
-### Таблица profiles
-
-* id (UUID)
-* user_id (UUID)
-* age (INT)
-* gender (TEXT)
-* bio (TEXT)
-* city (TEXT)
-* created_at (TIMESTAMP)
-
-### Таблица photos
-
-* id (UUID)
-* profile_id (UUID)
-* url (TEXT)
-
-### Таблица likes
-
-* id (UUID)
-* from_user (UUID)
-* to_user (UUID)
-* created_at (TIMESTAMP)
-
-### Таблица matches
-
-* id (UUID)
-* user1 (UUID)
-* user2 (UUID)
-* created_at (TIMESTAMP)
-
-### Таблица ratings
-
-* user_id (UUID)
-* base_score (FLOAT)
-* behavior_score (FLOAT)
-* total_score (FLOAT)
-* updated_at (TIMESTAMP)
-
----
-
-## Алгоритм ранжирования
-
-### Формула
-
-total_score = 0.4 * base_score + 0.6 * behavior_score
-
-### Уровни ранжирования
-
-#### Первичный рейтинг
-
-* Полнота профиля
-* Количество фотографий
-* Совпадение предпочтений
-
-#### Поведенческий рейтинг
-
-* Количество лайков
-* Соотношение лайков и пропусков
-* Частота мэтчей
-* Инициирование диалогов
-
-#### Комбинированный рейтинг
-
-* Взвешенная модель объединения показателей
-
----
-
-## Стек технологий
-
-* Python (FastAPI)
-* PostgreSQL
-* Redis
-* Celery
-* Kafka / RabbitMQ
-* MinIO (S3)
-* Docker
-
----
-## Дополнительные функции
-
-### 1. Boost анкеты
-
-Пользователь может временно поднять свою анкету в выдаче.
-
-Как работает:
-
-* При активации увеличивается `total_score`
-* Действует ограниченное время (например, 120 минут)
-* Реализуется через флаг в таблице ratings + Celery для сброса
-
----
-
-### 2. Просмотр “кто лайкнул”
-
-Пользователь может увидеть список тех, кто поставил лайк.
-
-Как работает:
-
-* Используется таблица likes
-* Фильтрация по `to_user`
-* Можно ограничить (например, только последние 10)
-
----
-
-### 3. Умная выдача по активности
-
-Система показывает более активных пользователей выше.
-
-Как работает:
-
-* Учитывается:
-
-  * время последнего входа
-  * частота действий
-* Добавляется коэффициент активности в рейтинг
-
----
-
-### 4. Анти-спам фильтр
-
-Ограничение на действия пользователя.
-
-Как работает:
-
-* Лимит лайков в минуту
-* Лимит сообщений после мэтча
-* Можно реализовать через Redis (rate limiting)
-
----
-
-### 5. “Избранное”
-
-Пользователь может сохранить анкету.
-
-Как работает:
-
-* Отдельная таблица favorites:
-
-  * user_id
-  * profile_id
-* Быстрый доступ к сохраненным анкетам
-
----
-
-### 6. Гео-приоритет
-
-Показывать анкеты ближе по расстоянию.
-
-Как работает:
-
-* Используется поле city или координаты
-* Добавляется бонус к рейтингу за близость
-
----
-
+- Ranking algorithm:
+- Level 1 (base): profile completeness, photo count, preference match
+- Level 2 (behavior): like/skip ratio, mutual likes rate, hour activity ratio
+- Level 3 (combined): `total_score = 0.4 * base_score + 0.6 * behavior_score`
+
+- Caching:
+- Redis queue for ranked profiles
+- Prefetch `10` profiles (configurable in `.env`)
+
+- Bot integration:
+- direct HTTP integration with all services
+- commands for profile management, feed, like, skip
+
+## Environment
+
+Each service has its own `.env` file.
+
+- `services/user_service/.env`
+- `services/profile_service/.env`
+- `services/interaction_service/.env`
+- `services/ranking_service/.env`
+- `services/bot_service/.env`
+
+You can create them from examples:
+
+```powershell
+Copy-Item C:\Users\gunba\Desktop\soft_hw\services\user_service\.env.example C:\Users\gunba\Desktop\soft_hw\services\user_service\.env
+Copy-Item C:\Users\gunba\Desktop\soft_hw\services\profile_service\.env.example C:\Users\gunba\Desktop\soft_hw\services\profile_service\.env
+Copy-Item C:\Users\gunba\Desktop\soft_hw\services\interaction_service\.env.example C:\Users\gunba\Desktop\soft_hw\services\interaction_service\.env
+Copy-Item C:\Users\gunba\Desktop\soft_hw\services\ranking_service\.env.example C:\Users\gunba\Desktop\soft_hw\services\ranking_service\.env
+Copy-Item C:\Users\gunba\Desktop\soft_hw\services\bot_service\.env.example C:\Users\gunba\Desktop\soft_hw\services\bot_service\.env
+```
+
+Required key in bot env:
+
+- `TELEGRAM_BOT_TOKEN=...`
+
+## Redis
+
+Run Redis:
+
+```powershell
+cd C:\Users\gunba\Desktop\soft_hw
+docker compose up -d redis
+```
+
+## Run Services
+
+### 1. User Service
+
+```powershell
+cd C:\Users\gunba\Desktop\soft_hw\services\user_service
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+uvicorn main:app --reload --port 8000
+```
+
+### 2. Profile Service
+
+```powershell
+cd C:\Users\gunba\Desktop\soft_hw\services\profile_service
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+uvicorn main:app --reload --port 8001
+```
+
+### 3. Interaction Service
+
+```powershell
+cd C:\Users\gunba\Desktop\soft_hw\services\interaction_service
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+uvicorn main:app --reload --port 8002
+```
+
+### 4. Ranking Service
+
+```powershell
+cd C:\Users\gunba\Desktop\soft_hw\services\ranking_service
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+uvicorn main:app --reload --port 8003
+```
+
+### 5. Bot Service
+
+```powershell
+cd C:\Users\gunba\Desktop\soft_hw\services\bot_service
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python bot.py
+```
+
+## Bot Commands
+
+- `/start`
+- `/help`
+- `/set_profile age|gender|city|bio|interests|photo_count|preferred_gender|preferred_age_min|preferred_age_max|preferred_city`
+- `/my_profile`
+- `/delete_profile`
+- `/feed`
+- `/like`
+- `/skip`
+
+## Minimal Flow
+
+1. Start all services and Redis.
+2. Open bot chat and send `/start`.
+3. Fill profile with `/set_profile`.
+4. Add at least 2 users with profiles.
+5. Use `/feed`, then `/like` or `/skip`.
