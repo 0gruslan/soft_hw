@@ -248,9 +248,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         user_id = await get_or_register_user_id(telegram_id)
         await update.message.reply_text(
-            "Регистрация прошла успешно.\n"
+            "Готово, ты зарегистрирован(а).\n"
             f"Твой ID: {user_id}\n"
-            "Дальше заполним анкету в удобном формате: /set_profile"
+            "Давай заполним анкету: /set_profile"
         )
     except httpx.RequestError:
         await update.message.reply_text("Ошибка регистрации: сервис пользователей недоступен.")
@@ -266,7 +266,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message is None:
         return
     await update.message.reply_text(
-        "Команды:\n"
+        "Вот что я умею:\n"
         "/start - регистрация\n"
         "/set_profile - заполнение анкеты по шагам\n"
         "/cancel_profile - прервать заполнение анкеты\n"
@@ -275,7 +275,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/feed - показать следующую анкету\n"
         "/like - поставить лайк\n"
         "/skip - пропустить\n\n"
-        "Можно и быстрым форматом:\n"
+        "Если удобно, можно заполнить анкету одной строкой:\n"
         "/set_profile 25|муж|Москва|Люблю спорт|спорт,кино|3|жен|20|30|Москва"
     )
 
@@ -311,8 +311,9 @@ async def set_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     begin_profile_wizard(context)
     first_question = PROFILE_STEPS[0][1]
     await update.message.reply_text(
-        "Отлично, давай заполним анкету. Я буду задавать вопросы по одному.\n"
-        "Если захочешь остановиться, отправь /cancel_profile.\n\n"
+        "Класс, начинаем заполнение анкеты.\n"
+        "Я задам несколько коротких вопросов.\n"
+        "Если захочешь остановиться, просто отправь /cancel_profile.\n\n"
         f"{first_question}"
     )
 
@@ -322,10 +323,10 @@ async def cancel_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     wizard = get_profile_wizard(context)
     if wizard is None:
-        await update.message.reply_text("Сейчас нет активного заполнения анкеты.")
+        await update.message.reply_text("Сейчас анкета не заполняется.")
         return
     clear_profile_wizard(context)
-    await update.message.reply_text("Заполнение анкеты остановлено.")
+    await update.message.reply_text("Ок, остановил заполнение анкеты.")
 
 
 async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -370,9 +371,9 @@ async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         result = await save_profile_for_user(user_id, payload)
         clear_profile_wizard(context)
         if result == "created":
-            await update.message.reply_text("Готово. Анкета создана.")
+            await update.message.reply_text("Отлично, анкета создана.")
         else:
-            await update.message.reply_text("Готово. Анкета обновлена.")
+            await update.message.reply_text("Супер, анкета обновлена.")
     except Exception:
         clear_profile_wizard(context)
         await update.message.reply_text("Не удалось сохранить анкету. Попробуй снова с /set_profile.")
@@ -415,7 +416,7 @@ async def feed(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = await get_or_register_user_id(update.effective_user.id)
         response = await get_json(f"{RANKING_SERVICE_URL}/ranking/next/{user_id}")
         if response.status_code == 404:
-            await update.message.reply_text("Лента пока пуста. Заполни анкету и дождись других пользователей.")
+            await update.message.reply_text("Пока некого показывать. Заполни анкету и загляни чуть позже.")
             return
         response.raise_for_status()
         payload = response.json()
@@ -431,7 +432,7 @@ async def save_action(update: Update, context: ContextTypes.DEFAULT_TYPE, action
     try:
         candidate_user_id = context.user_data.get("last_candidate_user_id")
         if not candidate_user_id:
-            await update.message.reply_text("Сначала открой анкету через /feed.")
+            await update.message.reply_text("Сначала открой анкету командой /feed.")
             return
         user_id = await get_or_register_user_id(update.effective_user.id)
         response = await post_json(
@@ -441,12 +442,12 @@ async def save_action(update: Update, context: ContextTypes.DEFAULT_TYPE, action
         response.raise_for_status()
         result = response.json()
         if result.get("is_match"):
-            await update.message.reply_text("Отлично! Лайк сохранен, у вас мэтч.")
+            await update.message.reply_text("Есть мэтч! Лайк сохранен.")
         else:
             if action == "like":
-                await update.message.reply_text("Лайк сохранен.")
+                await update.message.reply_text("Лайк поставлен.")
             else:
-                await update.message.reply_text("Анкета пропущена.")
+                await update.message.reply_text("Пропустили, показываю дальше по /feed.")
     except Exception:
         await update.message.reply_text("Не удалось сохранить действие.")
 
