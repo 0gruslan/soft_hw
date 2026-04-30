@@ -1,0 +1,20 @@
+﻿services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: simple-rabbitmq
+    cpus: 1.0
+    mem_limit: 512m
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+
+  redis:
+    image: redis:7.2
+    container_name: simple-redis
+    cpus: 1.0
+    mem_limit: 512m
+    ports:
+      - "6379:6379"
