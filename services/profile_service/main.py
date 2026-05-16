@@ -6,7 +6,7 @@ from typing import Optional
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import Column, DateTime, Integer, String, create_engine, select
+from sqlalchemy import Column, DateTime, Index, Integer, String, create_engine, select
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 load_dotenv()
@@ -21,6 +21,10 @@ Base = declarative_base()
 
 class Profile(Base):
     __tablename__ = "profiles"
+    __table_args__ = (
+        Index("ix_profiles_city_age_gender", "city", "age", "gender"),
+        Index("ix_profiles_updated_at", "updated_at"),
+    )
     id = Column(String, primary_key=True, index=True)
     user_id = Column(String, unique=True, index=True, nullable=False)
     age = Column(Integer, nullable=False)
@@ -199,7 +203,12 @@ def list_profiles(limit: int = Query(default=100, ge=1, le=500)):
 def list_candidates(viewer_user_id: str, limit: int = Query(default=200, ge=1, le=1000)):
     with SessionLocal() as db:
         profiles = (
-            db.execute(select(Profile).where(Profile.user_id != viewer_user_id).limit(limit))
+            db.execute(
+                select(Profile)
+                .where(Profile.user_id != viewer_user_id)
+                .order_by(Profile.updated_at.desc())
+                .limit(limit)
+            )
             .scalars()
             .all()
         )

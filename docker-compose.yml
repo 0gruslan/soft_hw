@@ -4,3 +4,121 @@ services:
     container_name: dating_redis
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  user_service:
+    build: ./services/user_service
+    container_name: dating_user_service
+    environment:
+      - DATABASE_URL=sqlite:///./user_service.db
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  profile_service:
+    build: ./services/profile_service
+    container_name: dating_profile_service
+    environment:
+      - DATABASE_URL=sqlite:///./profile_service.db
+    ports:
+      - "8001:8001"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  interaction_service:
+    build: ./services/interaction_service
+    container_name: dating_interaction_service
+    environment:
+      - DATABASE_URL=sqlite:///./interaction_service.db
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_QUEUE_NAME=ranking_updates
+      - ASYNC_RANKING_REFRESH_ENABLED=true
+    ports:
+      - "8002:8002"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  ranking_service:
+    build: ./services/ranking_service
+    container_name: dating_ranking_service
+    environment:
+      - PROFILE_SERVICE_URL=http://profile_service:8001
+      - INTERACTION_SERVICE_URL=http://interaction_service:8002
+      - REDIS_URL=redis://redis:6379/0
+      - PREFETCH_COUNT=10
+      - QUEUE_TTL_SECONDS=1800
+      - HTTP_TIMEOUT_SECONDS=8
+      - CANDIDATE_FETCH_LIMIT=500
+    ports:
+      - "8003:8003"
+    depends_on:
+      redis:
+        condition: service_healthy
+      profile_service:
+        condition: service_started
+      interaction_service:
+        condition: service_started
+
+  celery_worker:
+    build: ./services/celery_worker
+    container_name: dating_celery_worker
+    command: celery -A worker.celery_app worker --loglevel=info
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - CELERY_QUEUE_NAME=ranking_updates
+      - RANKING_SERVICE_URL=http://ranking_service:8003
+      - PROFILE_SERVICE_URL=http://profile_service:8001
+      - REFRESH_ALL_INTERVAL_MINUTES=5
+      - REFRESH_ALL_LIMIT=1000
+    depends_on:
+      redis:
+        condition: service_healthy
+      ranking_service:
+        condition: service_started
+
+  celery_beat:
+    build: ./services/celery_worker
+    container_name: dating_celery_beat
+    command: celery -A worker.celery_app beat --loglevel=info
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - CELERY_QUEUE_NAME=ranking_updates
+      - RANKING_SERVICE_URL=http://ranking_service:8003
+      - PROFILE_SERVICE_URL=http://profile_service:8001
+      - REFRESH_ALL_INTERVAL_MINUTES=5
+      - REFRESH_ALL_LIMIT=1000
+    depends_on:
+      redis:
+        condition: service_healthy
+      celery_worker:
+        condition: service_started
+
+  bot_service:
+    build: ./services/bot_service
+    container_name: dating_bot_service
+    profiles: ["bot"]
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - USER_SERVICE_URL=http://user_service:8000
+      - PROFILE_SERVICE_URL=http://profile_service:8001
+      - INTERACTION_SERVICE_URL=http://interaction_service:8002
+      - RANKING_SERVICE_URL=http://ranking_service:8003
+    depends_on:
+      user_service:
+        condition: service_started
+      profile_service:
+        condition: service_started
+      interaction_service:
+        condition: service_started
+      ranking_service:
+        condition: service_started

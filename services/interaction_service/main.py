@@ -3,15 +3,23 @@ import uuid
 from datetime import datetime, timezone
 from typing import Literal
 
+from celery import Celery
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import Column, DateTime, String, create_engine, select
+from sqlalchemy import Column, DateTime, Index, String, create_engine, select
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./interaction_service.db")
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
+CELERY_QUEUE_NAME = os.getenv("CELERY_QUEUE_NAME", "ranking_updates")
+ASYNC_RANKING_REFRESH_ENABLED = os.getenv("ASYNC_RANKING_REFRESH_ENABLED", "true").lower() in {
+    "1",
+    "true",
+    "yes",
+}
 
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 engine = create_engine(DATABASE_URL, connect_args=connect_args)
@@ -21,6 +29,11 @@ Base = declarative_base()
 
 class Interaction(Base):
     __tablename__ = "interactions"
+    __table_args__ = (
+        Index("ix_interactions_from_to_action", "from_user_id", "to_user_id", "action"),
+        Index("ix_interactions_to_action", "to_user_id", "action"),
+        Index("ix_interactions_from_created_at", "from_user_id", "created_at"),
+    )
     id = Column(String, primary_key=True, index=True)
     from_user_id = Column(String, index=True, nullable=False)
     to_user_id = Column(String, index=True, nullable=False)
@@ -63,11 +76,31 @@ class SeenTargetsOut(BaseModel):
 
 
 app = FastAPI()
+celery_client = Celery("interaction_service", broker=CELERY_BROKER_URL)
 
 
 @app.on_event("startup")
 def on_startup():
     Base.metadata.create_all(bind=engine)
+
+
+def enqueue_refresh_for_user(user_id: str):
+    if not ASYNC_RANKING_REFRESH_ENABLED:
+        return
+    try:
+        celery_client.send_task(
+            "celery_worker.refresh_user_ranking",
+            args=[user_id],
+            queue=CELERY_QUEUE_NAME,
+            countdown=2,
+        )
+    except Exception:
+        return
+
+
+def enqueue_refresh_for_pair(from_user_id: str, to_user_id: str):
+    enqueue_refresh_for_user(from_user_id)
+    enqueue_refresh_for_user(to_user_id)
 
 
 def compute_stats(db, user_id: str) -> UserStats:
@@ -132,6 +165,8 @@ def create_interaction(payload: InteractionIn):
                 )
             ).scalar_one_or_none()
             is_match = reverse_like is not None
+
+        enqueue_refresh_for_pair(payload.from_user_id, payload.to_user_id)
 
         return InteractionOut(
             id=interaction.id,

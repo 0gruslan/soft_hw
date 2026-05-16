@@ -5,7 +5,7 @@ from typing import Any, Optional
 import httpx
 import redis
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
 load_dotenv()
@@ -15,9 +15,13 @@ INTERACTION_SERVICE_URL = os.getenv("INTERACTION_SERVICE_URL", "http://localhost
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 PREFETCH_COUNT = int(os.getenv("PREFETCH_COUNT", "10"))
 QUEUE_TTL_SECONDS = int(os.getenv("QUEUE_TTL_SECONDS", "1800"))
+HTTP_TIMEOUT_SECONDS = float(os.getenv("HTTP_TIMEOUT_SECONDS", "8"))
+CANDIDATE_FETCH_LIMIT = int(os.getenv("CANDIDATE_FETCH_LIMIT", "500"))
 
 app = FastAPI()
 memory_cache: dict[str, list[str]] = {}
+http_client: Optional[httpx.Client] = None
+redis_client: Optional[redis.Redis] = None
 
 
 class RankedProfile(BaseModel):
@@ -40,13 +44,46 @@ class NextProfileOut(BaseModel):
     remaining_in_cache: int
 
 
-def get_redis_client():
+def build_http_client() -> httpx.Client:
+    return httpx.Client(timeout=HTTP_TIMEOUT_SECONDS)
+
+
+def connect_redis():
     try:
         client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
         client.ping()
         return client
     except Exception:
         return None
+
+
+@app.on_event("startup")
+def on_startup():
+    global http_client, redis_client
+    http_client = build_http_client()
+    redis_client = connect_redis()
+
+
+@app.on_event("shutdown")
+def on_shutdown():
+    global http_client
+    if http_client is not None:
+        http_client.close()
+        http_client = None
+
+
+def get_http_client() -> httpx.Client:
+    global http_client
+    if http_client is None:
+        http_client = build_http_client()
+    return http_client
+
+
+def get_redis_client():
+    global redis_client
+    if redis_client is None:
+        redis_client = connect_redis()
+    return redis_client
 
 
 def queue_key(viewer_user_id: str) -> str:
@@ -167,13 +204,13 @@ def calc_total_score(base_score: float, behavior_score: float) -> float:
 
 
 def fetch_json(method: str, url: str, payload: Optional[dict[str, Any]] = None):
-    with httpx.Client(timeout=8.0) as client:
-        if method == "GET":
-            response = client.get(url)
-        elif method == "POST":
-            response = client.post(url, json=payload)
-        else:
-            raise RuntimeError("Unsupported HTTP method")
+    client = get_http_client()
+    if method == "GET":
+        response = client.get(url)
+    elif method == "POST":
+        response = client.post(url, json=payload)
+    else:
+        raise RuntimeError("Unsupported HTTP method")
     if response.status_code == 404:
         return None, 404
     response.raise_for_status()
@@ -185,7 +222,10 @@ def build_ranked_profiles(viewer_user_id: str) -> list[dict[str, Any]]:
     if viewer_status == 404 or viewer_profile is None:
         raise HTTPException(status_code=404, detail="Viewer profile not found")
 
-    candidates, _ = fetch_json("GET", f"{PROFILE_SERVICE_URL}/profiles/candidates/{viewer_user_id}?limit=500")
+    candidates, _ = fetch_json(
+        "GET",
+        f"{PROFILE_SERVICE_URL}/profiles/candidates/{viewer_user_id}?limit={CANDIDATE_FETCH_LIMIT}",
+    )
     if candidates is None or len(candidates) == 0:
         return []
 
@@ -265,6 +305,37 @@ def refresh_ranking(viewer_user_id: str):
     return {"refreshed": True, "cached_count": added}
 
 
+@app.post("/ranking/refresh-all")
+def refresh_all(limit: int = Query(default=1000, ge=1, le=10000)):
+    profiles, status = fetch_json("GET", f"{PROFILE_SERVICE_URL}/profiles?limit={limit}")
+    if status == 404 or profiles is None:
+        return {"refreshed_users": 0, "cached_profiles": 0}
+
+    refreshed_users = 0
+    cached_profiles = 0
+    seen_users = set()
+    for profile in profiles:
+        user_id = profile.get("user_id")
+        if not user_id or user_id in seen_users:
+            continue
+        seen_users.add(user_id)
+        try:
+            cached_count = refill_cache(user_id)
+            refreshed_users += 1
+            cached_profiles += cached_count
+        except Exception:
+            continue
+
+    return {
+        "refreshed_users": refreshed_users,
+        "cached_profiles": cached_profiles,
+        "source_profiles": len(profiles),
+    }
+
+
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "redis_connected": get_redis_client() is not None,
+    }
